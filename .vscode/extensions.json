@@ -1,6 +1,5 @@
 {
     "recommendations": [
-        "vscjava.vscode-gradle",
-        "vscjava.vscode-java-pack"
+        "vscjava.vscode-gradle"
     ]
 }
