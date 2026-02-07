@@ -1,6 +1,9 @@
 {
     "recommendations": [
         "vscjava.vscode-gradle",
-        "redhat.java"
+        "redhat.java",
+        "ms-edgedevtools.vscode-edge-devtools",
+        "github.vscode-pull-request-github",
+        "eamodio.gitlens"
     ]
 }
