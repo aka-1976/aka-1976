@@ -1,0 +1,110 @@
+# .github/workflows/issue-triage.yml
+name: Issue Triage
+
+on:
+  issues:
+    types: [opened]  # ✅ Changed: only runs on issue creation, not edits
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read  # ✅ Added: needed to read CODEOWNERS file
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run triage script
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            if (!issue) return;
+            const title = (issue.title || '').toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+
+            // --- 1. Determine labels (simplified) ---
+            const labels = [];
+            if (title.includes('bug') || body.includes('steps to reproduce') || title.match(/crash|exception|error|failed/)) {
+              labels.push('bug', 'needs-reproduction');  // ✅ Changed: dropped 'triage/' prefix
+            } else {
+              labels.push('needs-info');                 // ✅ Changed: dropped 'triage/' prefix
+            }
+
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels
+            });
+
+            // --- 2. Assignment strategy: Try CODEOWNERS first, fallback to round-robin ---
+            let assignees = [];
+
+            // Attempt to read CODEOWNERS file
+            try {
+              const codeownersPath = '.github/CODEOWNERS';
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: codeownersPath
+              });
+
+              if (data && data.content) {
+                const content = Buffer.from(data.content, 'base64').toString('utf-8');
+                // Very basic parsing: extract usernames after paths (ignore comments/empty lines)
+                const lines = content.split('\n');
+                const owners = lines
+                  .filter(line => line.trim() && !line.startsWith('#'))
+                  .flatMap(line => {
+                    const match = line.match(/@[a-zA-Z0-9-]+/g);
+                    return match ? match.map(m => m.substring(1)) : []; // remove '@'
+                  });
+
+                if (owners.length > 0) {
+                  // Simple strategy: pick first unique owner, or first match
+                  assignees = [...new Set(owners)].slice(0, 2); // limit to 2 assignees
+                }
+              }
+            } catch (e) {
+              // No CODEOWNERS file or read error -> fallback
+              console.log('No CODEOWNERS found, using fallback assignment');
+            }
+
+            // Fallback: round-robin on your team
+            if (assignees.length === 0 && labels.includes('bug')) {
+              const team = ['jane-doe', 'john-smith', 'devon-chen']; // ✅ Your team members
+              const index = (issue.number - 1) % team.length;
+              assignees = [team[index]];
+            }
+
+            // Assign if we have assignees
+            if (assignees.length > 0) {
+              try {
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  assignees
+                });
+              } catch (e) {
+                console.log(`Assign failed: ${e.message}`);
+              }
+            }
+
+            // --- 3. Post helpful comment ---
+            const comment = labels.includes('bug')
+              ? "Thanks for the report — this looks like a bug. Please add reproduction steps, expected vs actual behavior, and any logs or minimal repro steps."
+              : "Thanks — could you add more detail (what you expected, what happened, steps to reproduce)? We'll triage once it's updated.";
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: comment
+            });
